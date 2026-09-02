@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AuthButton } from "@/components/AuthButton";
+import { UnlockLoader } from "@/components/UnlockLoader";
 import { ArticleView } from "@/components/ArticleView";
 import {
   SavedArticles,
@@ -65,7 +66,7 @@ export function HomePage() {
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 55000);
+      const timeout = setTimeout(() => controller.abort(), 35000);
 
       const res = await fetch("/api/unlock", {
         method: "POST",
@@ -153,15 +154,11 @@ export function HomePage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-2xl bg-[var(--accent)] px-6 py-3.5 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:opacity-50 sm:w-auto"
+                className="w-full rounded-2xl bg-[var(--accent)] px-6 py-3.5 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
-                {loading ? "Unlocking…" : "Unlock"}
+                Unlock
               </button>
-              {loading && (
-                <p className="text-center text-sm text-[var(--muted)]">
-                  Searching public archives… this can take up to 30 seconds.
-                </p>
-              )}
+              {loading && <UnlockLoader />}
             </form>
 
             {error && (

@@ -49,3 +49,22 @@ body {
   color: var(--accent);
   text-decoration: underline;
 }
+
+@keyframes unlock-progress {
+  0% {
+    width: 8%;
+    margin-left: 0%;
+  }
+  50% {
+    width: 45%;
+    margin-left: 30%;
+  }
+  100% {
+    width: 8%;
+    margin-left: 92%;
+  }
+}
+
+.unlock-progress-bar {
+  animation: unlock-progress 1.6s ease-in-out infinite;
+}

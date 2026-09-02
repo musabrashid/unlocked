@@ -29,6 +29,11 @@ const PAYWALL_PATTERNS = [
 const USER_AGENT =
   "Mozilla/5.0 (compatible; UnlockedReader/1.0; +https://github.com/musabrashid/unlocked)";
 
+const DIRECT_TIMEOUT_MS = 5_000;
+const ARCHIVE_API_TIMEOUT_MS = 6_000;
+const ARCHIVE_FETCH_TIMEOUT_MS = 12_000;
+const CDX_TIMEOUT_MS = 15_000;
+
 export function normalizeUrl(raw: string): string {
   const url = new URL(raw.trim());
   url.hash = "";
@@ -44,25 +49,6 @@ export function normalizeUrl(raw: string): string {
   }
   return url.toString();
 }
-
-function urlVariants(url: string): string[] {
-  const parsed = new URL(url);
-  const variants = new Set<string>([url]);
-
-  if (parsed.hostname.startsWith("www.")) {
-    const noWww = new URL(url);
-    noWww.hostname = parsed.hostname.slice(4);
-    variants.add(noWww.toString());
-  } else {
-    const withWww = new URL(url);
-    withWww.hostname = `www.${parsed.hostname}`;
-    variants.add(withWww.toString());
-  }
-
-  return [...variants];
-}
-
-const MIN_ARTICLE_WORDS = 300;
 
 function normalizeWaybackUrl(url: string): string {
   return url.replace(/^http:\/\/web\.archive\.org/i, "https://web.archive.org");
@@ -81,10 +67,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function getMetaContent(
-  document: Document,
-  keys: string[],
-): string | null {
+function getMetaContent(document: Document, keys: string[]): string | null {
   for (const key of keys) {
     const byProperty = document
       .querySelector(`meta[property="${key}"]`)
@@ -147,7 +130,7 @@ function extractArticle(html: string, pageUrl: string): UnlockedArticle | null {
   }
 
   const wordCount = article.textContent.trim().split(/\s+/).length;
-  if (wordCount < MIN_ARTICLE_WORDS) {
+  if (wordCount < 300) {
     return null;
   }
 
@@ -167,7 +150,10 @@ function extractArticle(html: string, pageUrl: string): UnlockedArticle | null {
   };
 }
 
-async function fetchHtml(url: string): Promise<string | null> {
+async function fetchHtml(
+  url: string,
+  timeoutMs = ARCHIVE_FETCH_TIMEOUT_MS,
+): Promise<string | null> {
   try {
     const response = await fetch(url, {
       headers: {
@@ -175,7 +161,7 @@ async function fetchHtml(url: string): Promise<string | null> {
         Accept: "text/html,application/xhtml+xml",
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) return null;
@@ -189,41 +175,27 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-async function getWaybackSnapshots(url: string, limit = 8): Promise<string[]> {
+async function getWaybackSnapshots(url: string, limit = 6): Promise<string[]> {
   try {
-    const parsed = new URL(url);
-    const cdxTargets = [
-      url,
-      `${parsed.origin}${parsed.pathname}`,
-    ];
+    const cdxUrl =
+      `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}` +
+      `&output=json&limit=-${limit}&filter=statuscode:200` +
+      `&filter=mimetype:text/html&collapse=digest`;
 
-    for (const target of cdxTargets) {
-      const cdxUrl =
-        `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}` +
-        `&output=json&limit=-${limit}&filter=statuscode:200` +
-        `&filter=mimetype:text/html&collapse=digest`;
+    const response = await fetch(cdxUrl, {
+      signal: AbortSignal.timeout(CDX_TIMEOUT_MS),
+    });
 
-      const response = await fetch(cdxUrl, {
-        signal: AbortSignal.timeout(12000),
-      });
+    if (!response.ok) return [];
 
-      if (!response.ok) continue;
+    const rows = (await response.json()) as string[][];
+    if (rows.length <= 1) return [];
 
-      const rows = (await response.json()) as string[][];
-      if (rows.length <= 1) continue;
-
-      return rows
-        .slice(1)
-        .sort((a, b) => Number(b[6] ?? 0) - Number(a[6] ?? 0))
-        .slice(0, limit)
-        .map((row) => {
-          const timestamp = row[1];
-          const original = row[2];
-          return `https://web.archive.org/web/${timestamp}/${original}`;
-        });
-    }
-
-    return [];
+    return rows
+      .slice(1)
+      .sort((a, b) => Number(b[6] ?? 0) - Number(a[6] ?? 0))
+      .slice(0, limit)
+      .map((row) => `https://web.archive.org/web/${row[1]}/${row[2]}`);
   } catch {
     return [];
   }
@@ -235,7 +207,7 @@ async function getWaybackAvailabilitySnapshot(
   try {
     const apiUrl = `https://web.archive.org/wayback/available?url=${encodeURIComponent(url)}`;
     const response = await fetch(apiUrl, {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(ARCHIVE_API_TIMEOUT_MS),
     });
 
     if (!response.ok) return null;
@@ -273,70 +245,22 @@ async function tryExtractFromSnapshot(
   };
 }
 
-async function tryWaybackUnlock(
+async function trySnapshotsBatched(
+  snapshotUrls: string[],
   originalUrl: string,
 ): Promise<UnlockedArticle | null> {
-  const variants = urlVariants(originalUrl);
-  const tried = new Set<string>();
+  const unique = [
+    ...new Set(snapshotUrls.map((url) => normalizeWaybackUrl(url))),
+  ];
 
-  async function trySnapshot(snapshotUrl: string): Promise<UnlockedArticle | null> {
-    const normalized = normalizeWaybackUrl(snapshotUrl);
-    if (tried.has(normalized)) return null;
-    tried.add(normalized);
-    return tryExtractFromSnapshot(normalized, originalUrl);
-  }
+  for (let index = 0; index < unique.length; index += 3) {
+    const batch = unique.slice(index, index + 3);
+    const results = await Promise.all(
+      batch.map((url) => tryExtractFromSnapshot(url, originalUrl)),
+    );
 
-  const availability = await Promise.all(
-    variants.map((variant) => getWaybackAvailabilitySnapshot(variant)),
-  );
-
-  for (const url of availability) {
-    if (!url) continue;
-    const result = await trySnapshot(url);
-    if (result) return result;
-  }
-
-  const cdxLists = await Promise.all(
-    variants.map((variant) => getWaybackSnapshots(variant, 6)),
-  );
-
-  for (const list of cdxLists) {
-    for (const url of list) {
-      const result = await trySnapshot(url);
-      if (result) return result;
-    }
-  }
-
-  return null;
-}
-
-async function tryDirectUnlock(
-  originalUrl: string,
-): Promise<UnlockedArticle | null> {
-  for (const variant of urlVariants(originalUrl)) {
-    const directHtml = await fetchHtml(variant);
-    if (!directHtml) continue;
-
-    const direct = extractArticle(directHtml, variant);
-    if (direct) {
-      return { ...direct, source: "direct", originalUrl };
-    }
-  }
-
-  return null;
-}
-
-async function tryPreviewUnlock(
-  originalUrl: string,
-): Promise<UnlockedArticle | null> {
-  for (const variant of urlVariants(originalUrl)) {
-    const html = await fetchHtml(variant);
-    if (!html) continue;
-
-    const preview = extractPreview(html, variant);
-    if (preview) {
-      return { ...preview, originalUrl };
-    }
+    const match = results.find((result) => result !== null);
+    if (match) return match;
   }
 
   return null;
@@ -347,10 +271,33 @@ export async function unlockArticle(
 ): Promise<UnlockedArticle | null> {
   const originalUrl = normalizeUrl(rawUrl);
 
-  const [direct, wayback] = await Promise.all([
-    tryDirectUnlock(originalUrl),
-    tryWaybackUnlock(originalUrl),
+  const archiveMetaPromise = Promise.all([
+    getWaybackAvailabilitySnapshot(originalUrl),
+    getWaybackSnapshots(originalUrl, 6),
   ]);
 
-  return direct ?? wayback ?? (await tryPreviewUnlock(originalUrl));
+  const directHtml = await fetchHtml(originalUrl, DIRECT_TIMEOUT_MS);
+  if (directHtml) {
+    const direct = extractArticle(directHtml, originalUrl);
+    if (direct) {
+      return { ...direct, source: "direct", originalUrl };
+    }
+  }
+
+  const [availability, cdxSnapshots] = await archiveMetaPromise;
+
+  const snapshotUrls = [...cdxSnapshots];
+  if (availability && !snapshotUrls.includes(availability)) {
+    snapshotUrls.push(availability);
+  }
+
+  const archived = await trySnapshotsBatched(snapshotUrls, originalUrl);
+  if (archived) return archived;
+
+  if (directHtml) {
+    const preview = extractPreview(directHtml, originalUrl);
+    if (preview) return { ...preview, originalUrl };
+  }
+
+  return null;
 }
