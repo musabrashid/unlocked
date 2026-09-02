@@ -150,7 +150,7 @@ export function HomePage() {
                   disabled={loading}
                   className="rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
                 >
-                  {loading ? "Unlocking…" : "Unlock"}
+                  {loading ? "Unlocking… (archives may take ~30s)" : "Unlock"}
                 </button>
               </div>
             </form>

@@ -22,6 +22,8 @@ const PAYWALL_PATTERNS = [
   /this article is for subscribers/i,
   /you've reached your limit of free articles/i,
   /to continue reading/i,
+  /subscribe for full access/i,
+  /purchase a subscription/i,
 ];
 
 const USER_AGENT =
@@ -43,8 +45,25 @@ export function normalizeUrl(raw: string): string {
   return url.toString();
 }
 
+function urlVariants(url: string): string[] {
+  const parsed = new URL(url);
+  const variants = new Set<string>([url]);
+
+  if (parsed.hostname.startsWith("www.")) {
+    const noWww = new URL(url);
+    noWww.hostname = parsed.hostname.slice(4);
+    variants.add(noWww.toString());
+  } else {
+    const withWww = new URL(url);
+    withWww.hostname = `www.${parsed.hostname}`;
+    variants.add(withWww.toString());
+  }
+
+  return [...variants];
+}
+
 function looksLikePaywall(text: string): boolean {
-  const sample = text.slice(0, 2000);
+  const sample = text.slice(0, 800);
   return PAYWALL_PATTERNS.some((pattern) => pattern.test(sample));
 }
 
@@ -81,7 +100,7 @@ async function fetchHtml(url: string): Promise<string | null> {
         Accept: "text/html,application/xhtml+xml",
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(20000),
     });
 
     if (!response.ok) return null;
@@ -95,12 +114,39 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-interface WaybackSnapshot {
-  available: boolean;
-  url?: string;
+async function getWaybackSnapshots(url: string, limit = 10): Promise<string[]> {
+  try {
+    const cdxUrl =
+      `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}` +
+      `&output=json&limit=-${limit}&filter=statuscode:200` +
+      `&filter=mimetype:text/html&collapse=digest`;
+
+    const response = await fetch(cdxUrl, {
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) return [];
+
+    const rows = (await response.json()) as string[][];
+    if (rows.length <= 1) return [];
+
+    return rows
+      .slice(1)
+      .sort((a, b) => Number(b[6] ?? 0) - Number(a[6] ?? 0))
+      .slice(0, limit)
+      .map((row) => {
+        const timestamp = row[1];
+        const original = row[2];
+        return `https://web.archive.org/web/${timestamp}/${original}`;
+      });
+  } catch {
+    return [];
+  }
 }
 
-async function getWaybackSnapshot(url: string): Promise<string | null> {
+async function getWaybackAvailabilitySnapshot(
+  url: string,
+): Promise<string | null> {
   try {
     const apiUrl = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
     const response = await fetch(apiUrl, {
@@ -110,7 +156,9 @@ async function getWaybackSnapshot(url: string): Promise<string | null> {
     if (!response.ok) return null;
 
     const data = (await response.json()) as {
-      archived_snapshots?: { closest?: WaybackSnapshot };
+      archived_snapshots?: {
+        closest?: { available?: boolean; url?: string };
+      };
     };
 
     const snapshot = data.archived_snapshots?.closest;
@@ -122,34 +170,83 @@ async function getWaybackSnapshot(url: string): Promise<string | null> {
   }
 }
 
-export async function unlockArticle(
-  rawUrl: string,
+async function tryExtractFromSnapshot(
+  snapshotUrl: string,
+  originalUrl: string,
 ): Promise<UnlockedArticle | null> {
-  const originalUrl = normalizeUrl(rawUrl);
+  const html = await fetchHtml(snapshotUrl);
+  if (!html) return null;
 
-  const directHtml = await fetchHtml(originalUrl);
-  if (directHtml) {
-    const direct = extractArticle(directHtml, originalUrl);
+  const archived = extractArticle(html, snapshotUrl);
+  if (!archived) return null;
+
+  return {
+    ...archived,
+    source: "wayback",
+    sourceUrl: snapshotUrl,
+    originalUrl,
+  };
+}
+
+async function tryWaybackUnlock(
+  originalUrl: string,
+): Promise<UnlockedArticle | null> {
+  const variants = urlVariants(originalUrl);
+  const snapshotUrls: string[] = [];
+  const seen = new Set<string>();
+
+  const lists = await Promise.all(
+    variants.map(async (variant) => {
+      const [snapshots, availability] = await Promise.all([
+        getWaybackSnapshots(variant, 5),
+        getWaybackAvailabilitySnapshot(variant),
+      ]);
+      return availability ? [availability, ...snapshots] : snapshots;
+    }),
+  );
+
+  for (const list of lists) {
+    for (const url of list) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        snapshotUrls.push(url);
+      }
+    }
+  }
+
+  for (const snapshotUrl of snapshotUrls) {
+    const result = await tryExtractFromSnapshot(snapshotUrl, originalUrl);
+    if (result) return result;
+  }
+
+  return null;
+}
+
+async function tryDirectUnlock(
+  originalUrl: string,
+): Promise<UnlockedArticle | null> {
+  for (const variant of urlVariants(originalUrl)) {
+    const directHtml = await fetchHtml(variant);
+    if (!directHtml) continue;
+
+    const direct = extractArticle(directHtml, variant);
     if (direct) {
       return { ...direct, source: "direct", originalUrl };
     }
   }
 
-  const waybackUrl = await getWaybackSnapshot(originalUrl);
-  if (waybackUrl) {
-    const waybackHtml = await fetchHtml(waybackUrl);
-    if (waybackHtml) {
-      const archived = extractArticle(waybackHtml, waybackUrl);
-      if (archived) {
-        return {
-          ...archived,
-          source: "wayback",
-          sourceUrl: waybackUrl,
-          originalUrl,
-        };
-      }
-    }
-  }
-
   return null;
+}
+
+export async function unlockArticle(
+  rawUrl: string,
+): Promise<UnlockedArticle | null> {
+  const originalUrl = normalizeUrl(rawUrl);
+
+  const [direct, wayback] = await Promise.all([
+    tryDirectUnlock(originalUrl),
+    tryWaybackUnlock(originalUrl),
+  ]);
+
+  return direct ?? wayback;
 }
