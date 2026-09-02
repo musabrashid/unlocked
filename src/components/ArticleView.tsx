@@ -1,6 +1,7 @@
 "use client";
 
 import type { UnlockedArticle } from "@/lib/unlock";
+import { ArticleContent } from "@/components/ArticleContent";
 
 interface ArticleViewProps {
   article: UnlockedArticle;
@@ -38,10 +39,7 @@ export function ArticleView({
           </button>
         )}
       </header>
-      <div
-        className="article-content text-[17px] leading-relaxed"
-        dangerouslySetInnerHTML={{ __html: article.content }}
-      />
+      <ArticleContent html={article.content} />
     </article>
   );
 }

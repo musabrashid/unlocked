@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AuthButton } from "@/components/AuthButton";
+import { ArticleContent } from "@/components/ArticleContent";
 
 interface SavedArticle {
   id: string;
@@ -94,10 +95,7 @@ export default function ArticlePageClient() {
                   View original
                 </a>
               </header>
-              <div
-                className="article-content text-[17px] leading-relaxed"
-                dangerouslySetInnerHTML={{ __html: article.content }}
-              />
+              <ArticleContent html={article.content} />
             </article>
           </>
         )}
