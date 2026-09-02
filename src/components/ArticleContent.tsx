@@ -14,7 +14,7 @@ function removeImageElement(img: HTMLImageElement) {
 
   if (
     parent &&
-    parent.classList.contains("article-content") === false &&
+    !parent.classList.contains("article-content") &&
     !parent.textContent?.trim() &&
     parent.querySelectorAll("img").length === 0
   ) {
