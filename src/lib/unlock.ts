@@ -1,7 +1,7 @@
 import { parseHTML } from "linkedom";
 import { Readability } from "@mozilla/readability";
 
-export type UnlockSource = "direct" | "wayback";
+export type UnlockSource = "direct" | "wayback" | "preview";
 
 export interface UnlockedArticle {
   title: string;
@@ -71,6 +71,70 @@ function normalizeWaybackUrl(url: string): string {
 function looksLikePaywall(text: string): boolean {
   const sample = text.slice(0, 800);
   return PAYWALL_PATTERNS.some((pattern) => pattern.test(sample));
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function getMetaContent(
+  document: Document,
+  keys: string[],
+): string | null {
+  for (const key of keys) {
+    const byProperty = document
+      .querySelector(`meta[property="${key}"]`)
+      ?.getAttribute("content");
+    if (byProperty?.trim()) return byProperty.trim();
+
+    const byName = document
+      .querySelector(`meta[name="${key}"]`)
+      ?.getAttribute("content");
+    if (byName?.trim()) return byName.trim();
+  }
+
+  return null;
+}
+
+function extractPreview(html: string, pageUrl: string): UnlockedArticle | null {
+  const { document } = parseHTML(html);
+
+  const title =
+    getMetaContent(document, ["og:title", "twitter:title"]) ||
+    document.querySelector("title")?.textContent?.trim();
+
+  const description = getMetaContent(document, [
+    "og:description",
+    "twitter:description",
+    "description",
+  ]);
+
+  if (!title || !description || description.length < 80) {
+    return null;
+  }
+
+  const siteName = getMetaContent(document, ["og:site_name"]);
+  const paragraphs = description
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => `<p>${escapeHtml(part)}</p>`)
+    .join("");
+
+  return {
+    title,
+    content: paragraphs || `<p>${escapeHtml(description)}</p>`,
+    excerpt: description.slice(0, 200),
+    byline: null,
+    siteName,
+    source: "preview",
+    sourceUrl: pageUrl,
+    originalUrl: pageUrl,
+  };
 }
 
 function extractArticle(html: string, pageUrl: string): UnlockedArticle | null {
@@ -262,6 +326,22 @@ async function tryDirectUnlock(
   return null;
 }
 
+async function tryPreviewUnlock(
+  originalUrl: string,
+): Promise<UnlockedArticle | null> {
+  for (const variant of urlVariants(originalUrl)) {
+    const html = await fetchHtml(variant);
+    if (!html) continue;
+
+    const preview = extractPreview(html, variant);
+    if (preview) {
+      return { ...preview, originalUrl };
+    }
+  }
+
+  return null;
+}
+
 export async function unlockArticle(
   rawUrl: string,
 ): Promise<UnlockedArticle | null> {
@@ -272,5 +352,5 @@ export async function unlockArticle(
     tryWaybackUnlock(originalUrl),
   ]);
 
-  return direct ?? wayback;
+  return direct ?? wayback ?? (await tryPreviewUnlock(originalUrl));
 }

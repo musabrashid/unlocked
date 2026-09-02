@@ -27,8 +27,19 @@ export function ArticleView({
           {article.title}
         </h1>
         <p className="mt-3 text-sm text-[var(--muted)]">
-          Source: {article.source === "wayback" ? "Internet Archive" : "Direct"}
+          Source:{" "}
+          {article.source === "wayback"
+            ? "Internet Archive"
+            : article.source === "preview"
+              ? "Public preview"
+              : "Direct"}
         </p>
+        {article.source === "preview" && (
+          <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-100">
+            Only a preview is publicly available for this article. The full
+            text is behind a paywall with no complete public archive.
+          </p>
+        )}
         {onSave && (
           <button
             onClick={onSave}
