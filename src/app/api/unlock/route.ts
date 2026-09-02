@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Could not unlock this article. Try a different link or check if an archive exists.",
+            "Could not unlock this article. It may be paywalled with no full public archive yet — try an older article or a different source.",
         },
         { status: 404 },
       );

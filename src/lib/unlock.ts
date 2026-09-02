@@ -62,6 +62,12 @@ function urlVariants(url: string): string[] {
   return [...variants];
 }
 
+const MIN_ARTICLE_WORDS = 300;
+
+function normalizeWaybackUrl(url: string): string {
+  return url.replace(/^http:\/\/web\.archive\.org/i, "https://web.archive.org");
+}
+
 function looksLikePaywall(text: string): boolean {
   const sample = text.slice(0, 800);
   return PAYWALL_PATTERNS.some((pattern) => pattern.test(sample));
@@ -73,6 +79,11 @@ function extractArticle(html: string, pageUrl: string): UnlockedArticle | null {
   const article = reader.parse();
 
   if (!article?.textContent || article.textContent.trim().length < 200) {
+    return null;
+  }
+
+  const wordCount = article.textContent.trim().split(/\s+/).length;
+  if (wordCount < MIN_ARTICLE_WORDS) {
     return null;
   }
 
@@ -114,31 +125,41 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-async function getWaybackSnapshots(url: string, limit = 10): Promise<string[]> {
+async function getWaybackSnapshots(url: string, limit = 8): Promise<string[]> {
   try {
-    const cdxUrl =
-      `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}` +
-      `&output=json&limit=-${limit}&filter=statuscode:200` +
-      `&filter=mimetype:text/html&collapse=digest`;
+    const parsed = new URL(url);
+    const cdxTargets = [
+      url,
+      `${parsed.origin}${parsed.pathname}`,
+    ];
 
-    const response = await fetch(cdxUrl, {
-      signal: AbortSignal.timeout(15000),
-    });
+    for (const target of cdxTargets) {
+      const cdxUrl =
+        `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}` +
+        `&output=json&limit=-${limit}&filter=statuscode:200` +
+        `&filter=mimetype:text/html&collapse=digest`;
 
-    if (!response.ok) return [];
-
-    const rows = (await response.json()) as string[][];
-    if (rows.length <= 1) return [];
-
-    return rows
-      .slice(1)
-      .sort((a, b) => Number(b[6] ?? 0) - Number(a[6] ?? 0))
-      .slice(0, limit)
-      .map((row) => {
-        const timestamp = row[1];
-        const original = row[2];
-        return `https://web.archive.org/web/${timestamp}/${original}`;
+      const response = await fetch(cdxUrl, {
+        signal: AbortSignal.timeout(12000),
       });
+
+      if (!response.ok) continue;
+
+      const rows = (await response.json()) as string[][];
+      if (rows.length <= 1) continue;
+
+      return rows
+        .slice(1)
+        .sort((a, b) => Number(b[6] ?? 0) - Number(a[6] ?? 0))
+        .slice(0, limit)
+        .map((row) => {
+          const timestamp = row[1];
+          const original = row[2];
+          return `https://web.archive.org/web/${timestamp}/${original}`;
+        });
+    }
+
+    return [];
   } catch {
     return [];
   }
@@ -148,9 +169,9 @@ async function getWaybackAvailabilitySnapshot(
   url: string,
 ): Promise<string | null> {
   try {
-    const apiUrl = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+    const apiUrl = `https://web.archive.org/wayback/available?url=${encodeURIComponent(url)}`;
     const response = await fetch(apiUrl, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!response.ok) return null;
@@ -164,7 +185,7 @@ async function getWaybackAvailabilitySnapshot(
     const snapshot = data.archived_snapshots?.closest;
     if (!snapshot?.available || !snapshot.url) return null;
 
-    return snapshot.url;
+    return normalizeWaybackUrl(snapshot.url);
   } catch {
     return null;
   }
@@ -192,31 +213,34 @@ async function tryWaybackUnlock(
   originalUrl: string,
 ): Promise<UnlockedArticle | null> {
   const variants = urlVariants(originalUrl);
-  const snapshotUrls: string[] = [];
-  const seen = new Set<string>();
+  const tried = new Set<string>();
 
-  const lists = await Promise.all(
-    variants.map(async (variant) => {
-      const [snapshots, availability] = await Promise.all([
-        getWaybackSnapshots(variant, 5),
-        getWaybackAvailabilitySnapshot(variant),
-      ]);
-      return availability ? [availability, ...snapshots] : snapshots;
-    }),
-  );
-
-  for (const list of lists) {
-    for (const url of list) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        snapshotUrls.push(url);
-      }
-    }
+  async function trySnapshot(snapshotUrl: string): Promise<UnlockedArticle | null> {
+    const normalized = normalizeWaybackUrl(snapshotUrl);
+    if (tried.has(normalized)) return null;
+    tried.add(normalized);
+    return tryExtractFromSnapshot(normalized, originalUrl);
   }
 
-  for (const snapshotUrl of snapshotUrls) {
-    const result = await tryExtractFromSnapshot(snapshotUrl, originalUrl);
+  const availability = await Promise.all(
+    variants.map((variant) => getWaybackAvailabilitySnapshot(variant)),
+  );
+
+  for (const url of availability) {
+    if (!url) continue;
+    const result = await trySnapshot(url);
     if (result) return result;
+  }
+
+  const cdxLists = await Promise.all(
+    variants.map((variant) => getWaybackSnapshots(variant, 6)),
+  );
+
+  for (const list of cdxLists) {
+    for (const url of list) {
+      const result = await trySnapshot(url);
+      if (result) return result;
+    }
   }
 
   return null;

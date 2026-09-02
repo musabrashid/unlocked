@@ -64,11 +64,17 @@ export function HomePage() {
     setSaved(false);
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 55000);
+
       const res = await fetch("/api/unlock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: url.trim() }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       const data = await res.json();
 
@@ -120,12 +126,12 @@ export function HomePage() {
 
   return (
     <div className="min-h-screen">
-      <header className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
+      <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-4 sm:px-6">
         <h1 className="text-lg font-semibold tracking-tight">Unlocked</h1>
         <AuthButton />
       </header>
 
-      <main className="mx-auto max-w-3xl px-6 py-16">
+      <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-16">
         {!article ? (
           <div className="flex min-h-[50vh] flex-col items-center justify-center">
             <h2 className="mb-2 text-center text-2xl font-semibold tracking-tight">
@@ -135,24 +141,27 @@ export function HomePage() {
               We&apos;ll try to fetch it from public sources and archives.
             </p>
 
-            <form onSubmit={handleUnlock} className="w-full max-w-xl">
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://example.com/article..."
-                  className="flex-1 rounded-full border border-[var(--border)] bg-transparent px-5 py-3 text-sm outline-none transition focus:border-[var(--accent)]"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
-                >
-                  {loading ? "Unlocking… (archives may take ~30s)" : "Unlock"}
-                </button>
-              </div>
+            <form onSubmit={handleUnlock} className="w-full max-w-xl space-y-3">
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/article..."
+                className="w-full rounded-2xl border border-[var(--border)] bg-transparent px-4 py-3.5 text-base outline-none transition focus:border-[var(--accent)] sm:px-5"
+                required
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-2xl bg-[var(--accent)] px-6 py-3.5 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:opacity-50 sm:w-auto"
+              >
+                {loading ? "Unlocking…" : "Unlock"}
+              </button>
+              {loading && (
+                <p className="text-center text-sm text-[var(--muted)]">
+                  Searching public archives… this can take up to 30 seconds.
+                </p>
+              )}
             </form>
 
             {error && (
