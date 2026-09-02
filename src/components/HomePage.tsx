@@ -143,21 +143,23 @@ export function HomePage() {
             </p>
 
             <form onSubmit={handleUnlock} className="w-full max-w-xl space-y-3">
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com/article..."
-                className="w-full rounded-2xl border border-[var(--border)] bg-transparent px-4 py-3.5 text-base outline-none transition focus:border-[var(--accent)] sm:px-5"
-                required
-              />
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-2xl bg-[var(--accent)] px-6 py-3.5 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-              >
-                Unlock
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://example.com/article..."
+                  className="w-full min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-transparent px-4 py-3.5 text-base outline-none transition focus:border-[var(--accent)] sm:px-5"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full shrink-0 rounded-2xl bg-[var(--accent)] px-8 py-3.5 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                >
+                  Unlock
+                </button>
+              </div>
               {loading && <UnlockLoader />}
             </form>
 
