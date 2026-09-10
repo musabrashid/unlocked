@@ -12,6 +12,7 @@
     "@mozilla/readability": "^0.6.0",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.8",
+    "@vercel/analytics": "^2.0.1",
     "linkedom": "^0.18.9",
     "next": "15.5.7",
     "react": "^19.0.0",
